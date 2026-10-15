@@ -28,6 +28,8 @@ import { AuthModal } from './components/AuthModal';
 import { FirebaseConfigModal } from './components/FirebaseConfigModal';
 import { CommunityView } from './components/CommunityView';
 import { LeaderboardView } from './components/LeaderboardView';
+import { AdminView } from './components/AdminView';
+import { AdminUnlockModal } from './components/AdminUnlockModal';
 
 function AttendanceApp() {
   const { user, userProfile, isConfigured } = useAuth();
@@ -91,6 +93,47 @@ function AttendanceApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [scenarioFilter, setScenarioFilter] = useState<AttendanceScenario | 'all'>('all');
   const [sortBy, setSortBy] = useState<'name' | 'percentage' | 'bunks'>('percentage');
+
+  // Admin Mode State (Protected by master passcode 2821)
+  const [isAdminUnlocked, setIsAdminUnlocked] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('chem_admin_unlocked') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isAdminUnlockModalOpen, setIsAdminUnlockModalOpen] = useState(false);
+
+  const handleUnlockAdminSuccess = () => {
+    try {
+      sessionStorage.setItem('chem_admin_unlocked', 'true');
+    } catch (e) {
+      console.warn(e);
+    }
+    setIsAdminUnlocked(true);
+    setIsAdminUnlockModalOpen(false);
+    setActiveTab('admin');
+  };
+
+  const handleLockAdmin = () => {
+    try {
+      sessionStorage.removeItem('chem_admin_unlocked');
+    } catch (e) {
+      console.warn(e);
+    }
+    setIsAdminUnlocked(false);
+    if (activeTab === 'admin') {
+      setActiveTab('dashboard');
+    }
+  };
+
+  const handleOpenAdminUnlock = () => {
+    if (isAdminUnlocked) {
+      setActiveTab('admin');
+    } else {
+      setIsAdminUnlockModalOpen(true);
+    }
+  };
 
   // Real-time Firestore Subscriptions
   useEffect(() => {
@@ -321,6 +364,8 @@ function AttendanceApp() {
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenConfig={() => setIsConfigOpen(true)}
         subjects={subjects}
+        isAdminUnlocked={isAdminUnlocked}
+        onOpenAdminUnlock={handleOpenAdminUnlock}
       />
 
       {/* Main Content Area */}
@@ -493,6 +538,22 @@ function AttendanceApp() {
         {activeTab === 'leaderboard' && (
           <LeaderboardView peers={allPeers} />
         )}
+
+        {/* Tab 4: Master Admin Panel (Add classes to all users) */}
+        {activeTab === 'admin' && (
+          <AdminView
+            isUnlocked={isAdminUnlocked}
+            onLock={handleLockAdmin}
+            onUnlockRequest={() => setIsAdminUnlockModalOpen(true)}
+            peers={allPeers}
+            currentLocalSubjects={subjects}
+            onAddLocalSubject={(newSub) => {
+              setLocalSubjects((prev) => [newSub, ...prev]);
+              setCloudSubjects((prev) => [newSub, ...prev]);
+            }}
+            onDeleteLocalSubject={handleDeleteSubject}
+          />
+        )}
       </main>
 
       {/* Add / Edit Modal */}
@@ -514,6 +575,13 @@ function AttendanceApp() {
       <FirebaseConfigModal
         isOpen={isConfigOpen}
         onClose={() => setIsConfigOpen(false)}
+      />
+
+      {/* Admin Unlock Passcode Modal (Master: 2821) */}
+      <AdminUnlockModal
+        isOpen={isAdminUnlockModalOpen}
+        onClose={() => setIsAdminUnlockModalOpen(false)}
+        onSuccess={handleUnlockAdminSuccess}
       />
 
       {/* Footer */}

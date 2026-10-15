@@ -1,9 +1,9 @@
 import React from 'react';
-import { FlaskConical, Plus, RotateCcw, Users, Trophy, BookOpen, KeyRound, LogIn } from 'lucide-react';
+import { FlaskConical, Plus, RotateCcw, Users, Trophy, BookOpen, KeyRound, LogIn, ShieldCheck, Lock } from 'lucide-react';
 import type { Subject } from '../types/attendance';
 import { useAuth } from '../firebase/AuthContext';
 
-export type ActiveTab = 'dashboard' | 'community' | 'leaderboard';
+export type ActiveTab = 'dashboard' | 'community' | 'leaderboard' | 'admin';
 
 interface HeaderProps {
   activeTab: ActiveTab;
@@ -13,6 +13,8 @@ interface HeaderProps {
   onOpenAuth: () => void;
   onOpenConfig: () => void;
   subjects: Subject[];
+  isAdminUnlocked: boolean;
+  onOpenAdminUnlock: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -23,6 +25,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAuth,
   onOpenConfig,
   subjects,
+  isAdminUnlocked,
+  onOpenAdminUnlock,
 }) => {
   const { user } = useAuth();
 
@@ -97,6 +101,32 @@ export const Header: React.FC<HeaderProps> = ({
               <Trophy className="w-3.5 h-3.5" />
               <span>Bunk Leaderboard</span>
             </button>
+
+            <button
+              onClick={() => {
+                if (isAdminUnlocked) {
+                  setActiveTab('admin');
+                } else {
+                  onOpenAdminUnlock();
+                }
+              }}
+              id="btn-nav-admin"
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'admin'
+                  ? 'bg-gradient-to-r from-cherry-700 to-rose-600 text-white shadow-cherry-glow'
+                  : 'text-rose-300/70 hover:text-white hover:bg-dark-800'
+              }`}
+            >
+              {isAdminUnlocked ? (
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Lock className="w-3.5 h-3.5 text-cherry-400" />
+              )}
+              <span>Admin</span>
+              {isAdminUnlocked && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
           </nav>
 
           {/* Action Controls & Auth Button */}
@@ -159,7 +189,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>My Subjects</span>
+            <span>Subjects</span>
           </button>
           <button
             onClick={() => setActiveTab('community')}
@@ -170,7 +200,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Classmates</span>
+            <span>Class</span>
           </button>
           <button
             onClick={() => setActiveTab('leaderboard')}
@@ -181,7 +211,29 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <Trophy className="w-3.5 h-3.5" />
-            <span>Leaderboard</span>
+            <span>Ranks</span>
+          </button>
+          <button
+            onClick={() => {
+              if (isAdminUnlocked) {
+                setActiveTab('admin');
+              } else {
+                onOpenAdminUnlock();
+              }
+            }}
+            id="btn-nav-admin-mobile"
+            className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === 'admin'
+                ? 'bg-gradient-to-r from-cherry-700 to-rose-600 text-white'
+                : 'text-rose-300/70 hover:text-white'
+            }`}
+          >
+            {isAdminUnlocked ? (
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
+            ) : (
+              <Lock className="w-3.5 h-3.5" />
+            )}
+            <span>Admin</span>
           </button>
         </div>
       </div>
