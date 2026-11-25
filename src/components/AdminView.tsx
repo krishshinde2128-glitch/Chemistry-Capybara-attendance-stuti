@@ -16,6 +16,10 @@ import {
   ChevronDown,
   ChevronUp,
   Award,
+  Zap,
+  Calendar,
+  Edit2,
+  X,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import type { Subject, UserProfile, PeerUserWithSubjects } from '../types/attendance';
@@ -24,11 +28,14 @@ import {
   broadcastClassToUsers,
   removeClassFromAllUsers,
   deleteSubjectFromFirestore,
+  updateSingleSubjectAttendanceInFirestore,
   type BroadcastClassPayload,
   type BroadcastResult,
 } from '../firebase/firestoreService';
 import { calculateOverallSummary, calculateSubjectStats } from '../utils/calculator';
 import { useAuth } from '../firebase/AuthContext';
+import { MassAttendanceUpdater } from './MassAttendanceUpdater';
+import { TimetableAttendanceManager } from './TimetableAttendanceManager';
 
 interface AdminViewProps {
   isUnlocked: boolean;
@@ -38,6 +45,7 @@ interface AdminViewProps {
   currentLocalSubjects: Subject[];
   onAddLocalSubject: (subject: Subject) => void;
   onDeleteLocalSubject: (id: string) => void;
+  onUpdateSubjects?: (updatedSubjects: Subject[]) => void;
 }
 
 // Preset course templates
@@ -115,8 +123,21 @@ export const AdminView: React.FC<AdminViewProps> = ({
   currentLocalSubjects,
   onAddLocalSubject,
   onDeleteLocalSubject,
+  onUpdateSubjects,
 }) => {
   const { user, isConfigured } = useAuth();
+
+  // Admin space active section: 'timetable' | 'mass-attendance' | 'broadcast' | 'directory'
+  const [adminSection, setAdminSection] = useState<'timetable' | 'mass-attendance' | 'broadcast' | 'directory'>('timetable');
+
+  // Single-subject inline edit state in directory inspector
+  const [editingSubjectData, setEditingSubjectData] = useState<{
+    subject: Subject;
+    studentName: string;
+    total: number;
+    conducted: number;
+    attended: number;
+  } | null>(null);
 
   // Firestore admin state
   const [dbUsers, setDbUsers] = useState<UserProfile[]>([]);
@@ -538,6 +559,82 @@ export const AdminView: React.FC<AdminViewProps> = ({
     }
   };
 
+  // Quick inline +/- attendance adjust for single subject in inspector
+  const handleQuickInlineAttendance = async (
+    subject: Subject,
+    deltaAttended: number,
+    deltaConducted: number
+  ) => {
+    const newConducted = Math.max(0, Math.min(subject.totalClasses, subject.conductedClasses + deltaConducted));
+    const newAttended = Math.max(0, Math.min(newConducted, subject.attendedClasses + deltaAttended));
+
+    const updated: Subject = {
+      ...subject,
+      conductedClasses: newConducted,
+      attendedClasses: newAttended,
+      lastUpdatedBy: `Admin (${user?.displayName || 'Admin'})`,
+      updatedAt: Date.now(),
+    };
+
+    try {
+      if (isConfigured) {
+        await updateSingleSubjectAttendanceInFirestore(
+          subject.id,
+          newAttended,
+          newConducted,
+          undefined,
+          `Admin (${user?.displayName || 'Admin'})`
+        );
+      }
+      if (onUpdateSubjects) {
+        onUpdateSubjects([updated]);
+      }
+      setDbSubjects((prev) => prev.map((s) => (s.id === subject.id ? updated : s)));
+      await fetchAdminData();
+    } catch (err: any) {
+      alert(`Could not update attendance: ${err.message}`);
+    }
+  };
+
+  // Save exact modal edit for single subject in inspector
+  const handleSaveInlineEditSubject = async () => {
+    if (!editingSubjectData) return;
+    const { subject, total, conducted, attended } = editingSubjectData;
+    const newT = Math.max(1, total);
+    const newC = Math.max(0, Math.min(newT, conducted));
+    const newA = Math.max(0, Math.min(newC, attended));
+
+    const updated: Subject = {
+      ...subject,
+      totalClasses: newT,
+      conductedClasses: newC,
+      attendedClasses: newA,
+      lastUpdatedBy: `Admin (${user?.displayName || 'Admin'})`,
+      updatedAt: Date.now(),
+    };
+
+    try {
+      if (isConfigured) {
+        await updateSingleSubjectAttendanceInFirestore(
+          subject.id,
+          newA,
+          newC,
+          newT,
+          `Admin (${user?.displayName || 'Admin'})`
+        );
+      }
+      if (onUpdateSubjects) {
+        onUpdateSubjects([updated]);
+      }
+      setDbSubjects((prev) => prev.map((s) => (s.id === subject.id ? updated : s)));
+      setEditingSubjectData(null);
+      await fetchAdminData();
+    } catch (err: any) {
+      alert(`Failed to save attendance: ${err.message}`);
+    }
+  };
+
+
   // Filtered users for the student directory
   const filteredUsers = allSystemUsers.filter((u) => {
     const q = directorySearch.toLowerCase();
@@ -660,8 +757,101 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
       </div>
 
-      {/* Main Grid: Broadcast Form & Preset Semester Packs */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      {/* Admin Space Section Navigation */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 p-1.5 rounded-2xl bg-dark-950/80 border border-cherry-900/60 backdrop-blur-md">
+        <button
+          type="button"
+          onClick={() => setAdminSection('timetable')}
+          id="tab-admin-timetable"
+          className={`py-3.5 px-3 rounded-xl font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all ${
+            adminSection === 'timetable'
+              ? 'bg-gradient-to-r from-sky-600 via-sky-500 to-indigo-600 text-white shadow-md border border-sky-400/40'
+              : 'text-rose-200/70 hover:text-white hover:bg-cherry-950/50'
+          }`}
+        >
+          <Calendar className="w-4 h-4 text-sky-300" />
+          <span>📅 Timetable Roll Call</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-sky-950 text-sky-200 border border-sky-800">
+            LP Batch
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAdminSection('mass-attendance')}
+          id="tab-admin-mass-attendance"
+          className={`py-3.5 px-3 rounded-xl font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all ${
+            adminSection === 'mass-attendance'
+              ? 'bg-gradient-to-r from-cherry-600 via-cherry-500 to-rose-600 text-white shadow-cherry-glow'
+              : 'text-rose-200/70 hover:text-white hover:bg-cherry-950/50'
+          }`}
+        >
+          <Zap className="w-4 h-4 text-cherry-300" />
+          <span>⚡ Mass Attendance</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-900/60 text-white border border-white/20">
+            All Courses
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAdminSection('broadcast')}
+          id="tab-admin-broadcast"
+          className={`py-3.5 px-3 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all ${
+            adminSection === 'broadcast'
+              ? 'bg-gradient-to-r from-cherry-600 via-cherry-500 to-rose-600 text-white shadow-cherry-glow'
+              : 'text-rose-200/70 hover:text-white hover:bg-cherry-950/50'
+          }`}
+        >
+          <Send className="w-4 h-4 text-rose-300" />
+          <span>📢 Broadcast Classes</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAdminSection('directory')}
+          id="tab-admin-directory"
+          className={`py-3.5 px-3 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-all ${
+            adminSection === 'directory'
+              ? 'bg-gradient-to-r from-cherry-600 via-cherry-500 to-rose-600 text-white shadow-cherry-glow'
+              : 'text-rose-200/70 hover:text-white hover:bg-cherry-950/50'
+          }`}
+        >
+          <Users className="w-4 h-4 text-amber-300" />
+          <span>👥 Student Directory</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-900/60 text-white border border-white/20">
+            {allSystemUsers.length}
+          </span>
+        </button>
+      </div>
+
+      {/* Tab 1: Google Sheet Timetable & Daily Roll Call for Larry Page Batch */}
+      {adminSection === 'timetable' && (
+        <TimetableAttendanceManager
+          allUsers={allSystemUsers}
+          allSubjects={allSystemSubjects}
+          isConfigured={isConfigured}
+          currentUser={user}
+          onUpdateSubjects={onUpdateSubjects}
+          onRefreshData={fetchAdminData}
+        />
+      )}
+
+      {/* Tab 2: Mass Attendance Updater (Update Everyone's Attendance at Once) */}
+      {adminSection === 'mass-attendance' && (
+        <MassAttendanceUpdater
+          allUsers={allSystemUsers}
+          allSubjects={allSystemSubjects}
+          isConfigured={isConfigured}
+          currentUser={user}
+          onUpdateSubjects={onUpdateSubjects}
+          onRefreshData={fetchAdminData}
+        />
+      )}
+
+      {/* Tab 3: Broadcast Classes & Preset Semester Packs */}
+      {adminSection === 'broadcast' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fadeIn">
         {/* Left Column: Broadcast Class to All Users (Cols 7) */}
         <div className="lg:col-span-7 space-y-6">
           <div className="glass-panel rounded-3xl p-6 sm:p-7 border border-cherry-700/50 shadow-xl relative">
@@ -1037,10 +1227,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      )}
 
-      {/* Full Students & Classes Directory */}
-      <div className="glass-panel rounded-3xl p-6 sm:p-8 border border-cherry-900/50">
+      {/* Tab 3: Full Students & Classes Directory */}
+      {adminSection === 'directory' && (
+        <div className="glass-panel rounded-3xl p-6 sm:p-8 border border-cherry-900/50 animate-fadeIn">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-cherry-950/80 mb-6">
           <div>
             <h3 className="text-xl font-black text-white tracking-tight flex items-center gap-2">
@@ -1162,18 +1354,54 @@ export const AdminView: React.FC<AdminViewProps> = ({
                                   </div>
                                 </div>
 
-                                <div className="flex items-center justify-between pt-1 border-t border-cherry-950 text-[10px]">
-                                  <span className={stats.scenario === 'safe' ? 'text-emerald-400' : stats.scenario === 'borderline' ? 'text-amber-400' : 'text-rose-400'}>
+                                <div className="flex items-center justify-between pt-2 border-t border-cherry-950 text-[10px]">
+                                  <span className={stats.scenario === 'safe' ? 'text-emerald-400 font-bold' : stats.scenario === 'borderline' ? 'text-amber-400 font-bold' : 'text-rose-400 font-bold'}>
                                     {stats.bunksRemaining} bunks left ({stats.scenario})
                                   </span>
 
-                                  <button
-                                    onClick={() => handleDeleteUserSubject(sub.id, sub.name)}
-                                    title="Delete this class for this user"
-                                    className="p-1 rounded text-rose-300/50 hover:text-rose-200 hover:bg-rose-950/50 transition-colors"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
+                                  {/* Inline Attendance Quick Buttons */}
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickInlineAttendance(sub, 1, 1)}
+                                      title="Mark Present (+1 Attended, +1 Conducted)"
+                                      className="px-1.5 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 font-bold border border-emerald-800/50 text-[10px] transition-colors"
+                                    >
+                                      +1 Att
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickInlineAttendance(sub, -1, -1)}
+                                      title="Undo Attendance (-1 Attended, -1 Conducted)"
+                                      className="px-1.5 py-0.5 rounded bg-dark-900 hover:bg-rose-950 text-rose-300 font-bold border border-cherry-900/50 text-[10px] transition-colors"
+                                    >
+                                      -1 Att
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setEditingSubjectData({
+                                          subject: sub,
+                                          studentName: stu.displayName,
+                                          total: sub.totalClasses,
+                                          conducted: sub.conductedClasses,
+                                          attended: sub.attendedClasses,
+                                        })
+                                      }
+                                      title="Edit exact counts for this student"
+                                      className="p-1 rounded text-rose-300/60 hover:text-white hover:bg-cherry-950 transition-colors"
+                                    >
+                                      <Edit2 className="w-3 h-3 text-rose-300" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteUserSubject(sub.id, sub.name)}
+                                      title="Delete this class for this user"
+                                      className="p-1 rounded text-rose-300/50 hover:text-rose-200 hover:bg-rose-950/50 transition-colors"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -1188,6 +1416,90 @@ export const AdminView: React.FC<AdminViewProps> = ({
           )}
         </div>
       </div>
+      )}
+
+      {/* Mini Edit Modal for single student subject in directory inspector */}
+      {editingSubjectData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-dark-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="glass-panel rounded-3xl p-6 sm:p-7 border border-cherry-700/60 shadow-2xl max-w-md w-full relative">
+            <div className="flex items-center justify-between pb-3 border-b border-cherry-950/80 mb-4">
+              <div>
+                <h4 className="font-bold text-white text-base">
+                  Edit Attendance for {editingSubjectData.studentName}
+                </h4>
+                <p className="text-xs text-rose-300/60">{editingSubjectData.subject.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSubjectData(null)}
+                className="p-1.5 rounded-xl text-rose-300/60 hover:text-white hover:bg-cherry-950"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-rose-200 mb-1">Total Classes (T)</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={editingSubjectData.total}
+                  onChange={(e) =>
+                    setEditingSubjectData({ ...editingSubjectData, total: Number(e.target.value) })
+                  }
+                  className="w-full px-3 py-2 rounded-xl bg-dark-950/90 border border-cherry-900/60 text-white font-bold text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-rose-200 mb-1">Conducted Classes (C)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editingSubjectData.conducted}
+                    onChange={(e) =>
+                      setEditingSubjectData({ ...editingSubjectData, conducted: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-dark-950/90 border border-cherry-900/60 text-white font-bold text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-rose-200 mb-1">Attended Classes (A)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editingSubjectData.attended}
+                    onChange={(e) =>
+                      setEditingSubjectData({ ...editingSubjectData, attended: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-dark-950/90 border border-cherry-900/60 text-white font-bold text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-3 border-t border-cherry-950">
+                <button
+                  type="button"
+                  onClick={() => setEditingSubjectData(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-dark-900 text-rose-300 hover:text-white border border-cherry-900 font-bold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveInlineEditSubject}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-cherry-600 to-rose-600 hover:from-cherry-500 hover:to-rose-500 text-white font-bold text-xs shadow-cherry-glow"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

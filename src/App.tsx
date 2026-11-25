@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { 
   Search, 
@@ -182,8 +182,37 @@ function AttendanceApp() {
     }
   };
 
-  // Filter and sort subjects
+  const orderedIdsRef = useRef<string[]>([]);
+  const lastSortKeyRef = useRef<string>('');
+
+  // Filter and sort subjects (preserve positions while updating attendance)
   const filteredSubjects = useMemo(() => {
+    const subjectIdsKey = subjects.map((s) => s.id).sort().join('|');
+    const namesKey = sortBy === 'name' ? subjects.map((s) => `${s.id}:${s.name}`).sort().join('|') : '';
+    const sortKey = `${sortBy}::${subjectIdsKey}::${namesKey}`;
+
+    if (sortKey !== lastSortKeyRef.current) {
+      const sorted = [...subjects].sort((a, b) => {
+        if (sortBy === 'name') {
+          return a.name.localeCompare(b.name);
+        }
+        if (sortBy === 'bunks') {
+          const bunksA = calculateSubjectStats(a).bunksRemaining;
+          const bunksB = calculateSubjectStats(b).bunksRemaining;
+          return bunksA - bunksB;
+        }
+        const statA = calculateSubjectStats(a);
+        const statB = calculateSubjectStats(b);
+        return statA.currentPercentage - statB.currentPercentage;
+      });
+      orderedIdsRef.current = sorted.map((s) => s.id);
+      lastSortKeyRef.current = sortKey;
+    }
+
+    const orderIndex = new Map<string, number>(
+      orderedIdsRef.current.map((id, idx) => [id, idx])
+    );
+
     return subjects
       .filter((sub) => {
         const matchesQuery =
@@ -196,17 +225,9 @@ function AttendanceApp() {
         return stats.scenario === scenarioFilter;
       })
       .sort((a, b) => {
-        if (sortBy === 'name') {
-          return a.name.localeCompare(b.name);
-        }
-        if (sortBy === 'bunks') {
-          const bunksA = calculateSubjectStats(a).bunksRemaining;
-          const bunksB = calculateSubjectStats(b).bunksRemaining;
-          return bunksA - bunksB;
-        }
-        const statA = calculateSubjectStats(a);
-        const statB = calculateSubjectStats(b);
-        return statA.currentPercentage - statB.currentPercentage;
+        const idxA = orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+        const idxB = orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+        return idxA - idxB;
       });
   }, [subjects, searchQuery, scenarioFilter, sortBy]);
 
@@ -228,12 +249,13 @@ function AttendanceApp() {
     const userName = userProfile?.displayName || user?.displayName || 'Student';
     const subjectId = data.id || `sub_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     
+    const existingSubject = data.id ? subjects.find((s) => s.id === data.id) : undefined;
     const subjectToSave: Subject = {
       ...data,
       id: subjectId,
       userId: user?.uid,
       userName,
-      createdAt: Date.now(),
+      createdAt: existingSubject?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
 
@@ -552,6 +574,11 @@ function AttendanceApp() {
               setCloudSubjects((prev) => [newSub, ...prev]);
             }}
             onDeleteLocalSubject={handleDeleteSubject}
+            onUpdateSubjects={(updatedSubjects: Subject[]) => {
+              const updateMap = new Map<string, Subject>(updatedSubjects.map((s) => [s.id, s]));
+              setLocalSubjects((prev: Subject[]): Subject[] => prev.map((s) => updateMap.get(s.id) || s));
+              setCloudSubjects((prev: Subject[]): Subject[] => prev.map((s) => updateMap.get(s.id) || s));
+            }}
           />
         )}
       </main>

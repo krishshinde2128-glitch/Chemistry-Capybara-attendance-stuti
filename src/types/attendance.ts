@@ -6,6 +6,7 @@ export interface UserProfile {
   isPrivate: boolean; // Privacy Toggle: if true, attendance is hidden from other users
   totalBunksRemaining?: number;
   overallPercentage?: number;
+  batch?: string; // e.g. 'larrypage'
   updatedAt: number;
 }
 
@@ -54,4 +55,27 @@ export interface PeerUserWithSubjects {
   user: UserProfile;
   subjects: Subject[];
   summary: OverallSummary;
+}
+
+export type DayOfWeek = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
+
+export interface TimetableClass {
+  id: string;
+  day: DayOfWeek;
+  startTime: string; // e.g. "09:00 AM"
+  endTime: string;   // e.g. "10:00 AM"
+  timeSlot: string;  // e.g. "09:00 - 10:00"
+  subjectName: string;
+  courseCode?: string;
+  batch: string;     // e.g. "larrypage"
+  room?: string;
+  instructor?: string;
+  lastMarkedDate?: string; // YYYY-MM-DD
+}
+
+export interface TimetableConfig {
+  sheetUrl: string;
+  targetBatch: string; // default "larrypage"
+  lastSyncedAt?: number;
+  classes: TimetableClass[];
 }

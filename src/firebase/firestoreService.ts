@@ -8,6 +8,7 @@ import {
   where,
   updateDoc,
   getDocs,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from './config';
 import type { Subject, UserProfile, PeerUserWithSubjects } from '../types/attendance';
@@ -16,7 +17,7 @@ import { calculateOverallSummary } from '../utils/calculator';
 /**
  * Strips undefined values from an object so Firestore does not reject it
  */
-function cleanFirestoreData<T extends Record<string, any>>(obj: T): Record<string, any> {
+export function cleanFirestoreData<T extends Record<string, any>>(obj: T): Record<string, any> {
   const result: Record<string, any> = {};
   for (const key of Object.keys(obj)) {
     const val = obj[key];
@@ -125,7 +126,7 @@ export function subscribeToUserSubjects(userId: string, onUpdate: (subjects: Sub
     snapshot.forEach((docSnap) => {
       list.push(docSnap.data() as Subject);
     });
-    list.sort((a, b) => b.updatedAt - a.updatedAt);
+    list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id));
     onUpdate(list);
   }, (err) => {
     console.warn('Error subscribing to user subjects:', err);
@@ -392,5 +393,149 @@ export async function removeClassFromAllUsers(subjectName: string): Promise<numb
   }
 
   return toDeleteIds.length;
+}
+
+export interface BatchAttendanceUpdateItem {
+  subjectId: string;
+  attendedClasses: number;
+  conductedClasses: number;
+  totalClasses?: number;
+  userId?: string;
+  userName?: string;
+  subjectName?: string;
+}
+
+export interface BatchAttendanceUpdateResult {
+  totalTargeted: number;
+  updatedCount: number;
+  failedCount: number;
+  details: Array<{
+    subjectId: string;
+    userId?: string;
+    userName?: string;
+    subjectName?: string;
+    status: 'updated' | 'error';
+    error?: string;
+  }>;
+}
+
+/**
+ * ADMIN: Updates attendance (attendedClasses, conductedClasses, and optional totalClasses)
+ * for multiple subjects at once across all users using atomic Firestore writeBatch.
+ */
+export async function batchUpdateSubjectsAttendanceInFirestore(
+  updates: BatchAttendanceUpdateItem[],
+  updaterName = 'Admin Mass Update'
+): Promise<BatchAttendanceUpdateResult> {
+  if (!db) throw new Error('Firestore is not initialized');
+
+  if (updates.length === 0) {
+    return { totalTargeted: 0, updatedCount: 0, failedCount: 0, details: [] };
+  }
+
+  const BATCH_SIZE = 400;
+  const details: BatchAttendanceUpdateResult['details'] = [];
+  let updatedCount = 0;
+  let failedCount = 0;
+
+  for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+    const chunk = updates.slice(i, i + BATCH_SIZE);
+    const batch = writeBatch(db);
+
+    for (const item of chunk) {
+      const subjectDoc = doc(db, 'subjects', item.subjectId);
+      const updatePayload: Record<string, any> = {
+        attendedClasses: Number(item.attendedClasses),
+        conductedClasses: Number(item.conductedClasses),
+        lastUpdatedBy: updaterName,
+        updatedAt: Date.now(),
+      };
+      if (item.totalClasses !== undefined) {
+        updatePayload.totalClasses = Number(item.totalClasses);
+      }
+      batch.update(subjectDoc, cleanFirestoreData(updatePayload));
+    }
+
+    try {
+      await batch.commit();
+      updatedCount += chunk.length;
+      chunk.forEach((item) => {
+        details.push({
+          subjectId: item.subjectId,
+          userId: item.userId,
+          userName: item.userName,
+          subjectName: item.subjectName,
+          status: 'updated',
+        });
+      });
+    } catch (err: any) {
+      console.error('Batch commit failed for chunk, falling back to sequential writes:', err);
+      // Fallback: Try updating individually in this chunk if batch fails
+      for (const item of chunk) {
+        try {
+          const subjectDoc = doc(db, 'subjects', item.subjectId);
+          const updatePayload: Record<string, any> = {
+            attendedClasses: Number(item.attendedClasses),
+            conductedClasses: Number(item.conductedClasses),
+            lastUpdatedBy: updaterName,
+            updatedAt: Date.now(),
+          };
+          if (item.totalClasses !== undefined) {
+            updatePayload.totalClasses = Number(item.totalClasses);
+          }
+          await updateDoc(subjectDoc, cleanFirestoreData(updatePayload));
+          updatedCount++;
+          details.push({
+            subjectId: item.subjectId,
+            userId: item.userId,
+            userName: item.userName,
+            subjectName: item.subjectName,
+            status: 'updated',
+          });
+        } catch (singleErr: any) {
+          failedCount++;
+          details.push({
+            subjectId: item.subjectId,
+            userId: item.userId,
+            userName: item.userName,
+            subjectName: item.subjectName,
+            status: 'error',
+            error: singleErr.message || 'Write error',
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    totalTargeted: updates.length,
+    updatedCount,
+    failedCount,
+    details,
+  };
+}
+
+/**
+ * ADMIN: Update a single subject's attendance counts directly
+ */
+export async function updateSingleSubjectAttendanceInFirestore(
+  subjectId: string,
+  attendedClasses: number,
+  conductedClasses: number,
+  totalClasses?: number,
+  updaterName = 'Admin'
+): Promise<void> {
+  if (!db) throw new Error('Firestore is not initialized');
+  const subjectDoc = doc(db, 'subjects', subjectId);
+  const data: Record<string, any> = {
+    attendedClasses: Math.max(0, attendedClasses),
+    conductedClasses: Math.max(0, conductedClasses),
+    lastUpdatedBy: updaterName,
+    updatedAt: Date.now(),
+  };
+  if (totalClasses !== undefined) {
+    data.totalClasses = Math.max(1, totalClasses);
+  }
+  await updateDoc(subjectDoc, cleanFirestoreData(data));
 }
 
